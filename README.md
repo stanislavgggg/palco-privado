@@ -57,6 +57,34 @@ Fill `[partido]` with a real fixture on the day; on Monday–Tuesday prefer p3, 
 
 Start test: contrast (p2, p5 in football channels) vs challenge (p4, p8 broad) vs identification (p3, p7). Judge by cost per WhatsApp number; export each batch with `/export es_p<code>`.
 
+## Mini app (same service, same domain)
+
+The bot's Express server also serves the mini app — nothing extra to deploy:
+
+| Path | What |
+| --- | --- |
+| `/app/` | The game: match tickets, pick home / draw / away, AI reveal after your pick, Tú–IA scoreboard, results, weekly top |
+| `/app/privacy`, `/app/terms` | Privacy policy and terms (Spanish), filled from `COMPANY_*`, `PRIVACY_EMAIL`, `LEGAL_UPDATED` |
+| `/api/*` | JSON API; every call is authenticated with Telegram `initData` (HMAC with the bot token, max age 24 h) |
+
+Same database, same game: a pick made in the app is graded by the same scheduler; the user gets the result in the bot chat if they allowed messages (`allows_write_to_pm`, or the "Avisarme en Telegram" button → `requestWriteAccess`). Users who never allowed messages are not messaged and not counted as blocked. `/stats` shows `via app` per source.
+
+**White-hat by design (for mini-app moderation):** no betting words, no operator, no bonus, no prizes, no money; footer says "free football prediction game, no real money, not a bookmaker"; terms state no affiliation with LaLiga / UEFA / clubs; the AI pick is shown only after the user picks; WhatsApp is an optional form with two unticked boxes (18+, consent) and a privacy link; one-tap opt-out deletes the number. The community link (Apuestas Guru) is **not** shown in the app — only in the bot after the number is saved.
+
+### Setup
+
+1. Railway variables: `PUBLIC_URL` (the service domain), `BOT_USERNAME`, `PRIVACY_EMAIL` (shown in the privacy page — required before launch), optionally `COMPANY_*`, `LEGAL_UPDATED`. With `PUBLIC_URL` set, `PRIVACY_URL` defaults to `<PUBLIC_URL>/app/privacy` (also used in the bot's consent text).
+2. The bot sets a **"Jugar"** menu button that opens `<PUBLIC_URL>/app/` on start.
+3. BotFather → `/newapp` → choose the bot → title "Palco Privado", short description, 640×360 image, URL `<PUBLIC_URL>/app/`, short name e.g. `palco`. Direct link: `https://t.me/<BOT_USERNAME>/palco`.
+4. Telegram Ads to the mini app: `https://t.me/<BOT_USERNAME>/palco?startapp=es_app<code>` — the start param becomes the user's source (same rules as `/start`: letters, digits, `_`, `-`, up to 64), so `/export es_app1` gives that batch.
+5. BotFather → `/setprivacy_policy`-style field in the bot profile (Bot Settings → Privacy Policy) → `<PUBLIC_URL>/app/privacy`.
+
+**Have a lawyer read `public/privacy.html` and `public/terms.html` before launch** — they're a reasonable GDPR-shaped draft, not legal advice. In particular: the list of processors (hosting, WhatsApp sending platform), data transfers outside the EEA, and retention periods must match what you actually use.
+
+### Mini app tests
+
+`npm test` runs both suites; `test/webapp.js` covers initData validation (valid / tampered / wrong token / expired), 401 without auth, static pages + CSP, legal pages rendering, registration from the app with source and message permission, picks and duplicates, AI hidden before the pick, grading for app users without message permission, history, WhatsApp consent / invalid phone / masking / webhook, opt-out, write-access grant, top without ids.
+
 ## Data source
 
 `SETS_URL` + `SETS_TOKEN` — the football predictions export. Football has three outcomes; `src/api.js → normalizeSet()` maps picks to home / draw / away (team name, "1/X/2", "draw", "empate"…) and takes the result from `result.winner`/`outcome` or from the score ("2-1"). Check it against one real record before launch; `SETS_MOCK=1` runs on `fixtures/sets.sample.json`.

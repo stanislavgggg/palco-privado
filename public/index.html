@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Palco Privado · Tú vs IA</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <header class="box">
+    <div class="box__brand">
+      <h1>Palco Privado</h1>
+      <p>Tú eliges el resultado. La IA elige el suyo. El partido decide.</p>
+    </div>
+    <div class="board" aria-label="Marcador">
+      <div class="board__side">
+        <span class="board__who">Tú</span>
+        <span class="board__num" id="scoreUser">0</span>
+      </div>
+      <span class="board__colon" aria-hidden="true">:</span>
+      <div class="board__side board__side--ai">
+        <span class="board__num" id="scoreAi">0</span>
+        <span class="board__who">IA</span>
+      </div>
+    </div>
+    <p class="streak" id="streak" hidden></p>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Secciones">
+    <button role="tab" id="tab-matches" aria-selected="true" data-tab="matches">Partidos</button>
+    <button role="tab" id="tab-history" aria-selected="false" data-tab="history">Resultados</button>
+    <button role="tab" id="tab-top" aria-selected="false" data-tab="top">Top semanal</button>
+  </nav>
+
+  <main>
+    <section id="panel-matches" role="tabpanel" aria-labelledby="tab-matches">
+      <div id="matches" class="tickets" aria-live="polite"></div>
+
+      <div id="pmCard" class="note" hidden>
+        <p>¿Te avisamos del resultado aquí en Telegram cuando termine el partido?</p>
+        <button class="btn btn--ghost" id="pmBtn" type="button">Avisarme en Telegram</button>
+      </div>
+
+      <form id="waForm" class="wa" hidden novalidate>
+        <h2>Avisos por WhatsApp</h2>
+        <p class="wa__lead">Opcional. Antes de los partidos grandes: alineaciones confirmadas y lo que dicen los modelos. Como máximo un mensaje al día.</p>
+        <label class="wa__field">
+          <span>Tu número de WhatsApp</span>
+          <input id="waPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="612 345 678" maxlength="20" required>
+        </label>
+        <label class="check">
+          <input id="waAdult" type="checkbox">
+          <span>Tengo 18 años o más.</span>
+        </label>
+        <label class="check">
+          <input id="waConsent" type="checkbox">
+          <span>Acepto recibir por WhatsApp pronósticos de fútbol y comunicaciones comerciales de <span id="companyName">GG Group Media</span>. Puedo darme de baja en cualquier momento. <a href="privacy" target="_blank" rel="noopener">Política de privacidad</a>.</span>
+        </label>
+        <p class="wa__error" id="waError" role="alert" hidden></p>
+        <button class="btn" id="waSubmit" type="submit" disabled>Recibir avisos</button>
+      </form>
+
+      <div id="waSaved" class="note" hidden>
+        <p>Avisos por WhatsApp activos en <strong id="waPhoneMasked"></strong>.</p>
+        <button class="link" id="waOptout" type="button">Darme de baja y borrar mi número</button>
+      </div>
+    </section>
+
+    <section id="panel-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+      <ol id="history" class="history"></ol>
+    </section>
+
+    <section id="panel-top" role="tabpanel" aria-labelledby="tab-top" hidden>
+      <ol id="top" class="top"></ol>
+      <p class="muted" id="topMe"></p>
+      <p class="muted">Sin premios: el top es solo para presumir.</p>
+    </section>
+
+    <p id="status" class="status" role="status" hidden></p>
+  </main>
+
+  <footer class="legal">
+    <p>Juego gratuito de pronósticos de fútbol. Sin premios ni dinero real. No somos una casa de apuestas.</p>
+    <p><a href="privacy" target="_blank" rel="noopener">Privacidad</a> <a href="terms" target="_blank" rel="noopener">Términos</a></p>
+  </footer>
+
+  <template id="ticketTpl">
+    <article class="ticket">
+      <div class="ticket__main">
+        <p class="ticket__meta"><span class="ticket__comp"></span><time class="ticket__time"></time></p>
+        <h3 class="ticket__teams"><span class="ticket__home"></span><span class="ticket__vs">vs</span><span class="ticket__away"></span></h3>
+        <div class="ticket__picks" role="group" aria-label="Elige el resultado">
+          <button type="button" class="pick" data-pick="home"></button>
+          <button type="button" class="pick" data-pick="draw">Empate</button>
+          <button type="button" class="pick" data-pick="away"></button>
+        </div>
+        <div class="ticket__reveal" hidden></div>
+      </div>
+      <div class="ticket__stub" aria-hidden="true"><span></span></div>
+    </article>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

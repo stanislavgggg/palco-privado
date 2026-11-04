@@ -29,6 +29,8 @@ function openDb(dbPath) {
       consent_at INTEGER,
       consent_version TEXT,
       optout_at INTEGER,
+      pm_allowed INTEGER DEFAULT 1,
+      entry TEXT DEFAULT 'bot',
       blocked INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS picks (
@@ -36,6 +38,12 @@ function openDb(dbPath) {
       match_id TEXT NOT NULL,
       pick TEXT NOT NULL,
       ai_pick TEXT,
+      home TEXT,
+      away TEXT,
+      competition TEXT,
+      starts_at INTEGER,
+      result_score TEXT,
+      result_outcome TEXT,
       created_at INTEGER NOT NULL,
       graded INTEGER DEFAULT 0,
       correct INTEGER,
@@ -69,15 +77,15 @@ function openDb(dbPath) {
     raw: db,
     getUser: (id) => db.prepare('SELECT * FROM users WHERE id = ?').get(id),
 
-    upsertUser({ id, username, first_name, src, variant }) {
+    upsertUser({ id, username, first_name, src, variant, entry = 'bot', pm_allowed = 1 }) {
       const existing = api.getUser(id);
       if (existing) {
         db.prepare('UPDATE users SET username = ?, first_name = ?, blocked = 0 WHERE id = ?')
           .run(username || null, first_name || null, id);
         return { user: api.getUser(id), isNew: false };
       }
-      db.prepare('INSERT INTO users (id, username, first_name, src, variant, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(id, username || null, first_name || null, src || 'organic', variant, now());
+      db.prepare('INSERT INTO users (id, username, first_name, src, variant, created_at, entry, pm_allowed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, username || null, first_name || null, src || 'organic', variant, now(), entry, pm_allowed ? 1 : 0);
       return { user: api.getUser(id), isNew: true };
     },
 
@@ -89,15 +97,19 @@ function openDb(dbPath) {
     },
 
     getPick: (u, m) => db.prepare('SELECT * FROM picks WHERE user_id = ? AND match_id = ?').get(u, String(m)),
-    addPick({ userId, matchId, pick, aiPick }) {
-      return db.prepare(`INSERT OR IGNORE INTO picks (user_id, match_id, pick, ai_pick, created_at) VALUES (?, ?, ?, ?, ?)`)
-        .run(userId, String(matchId), pick, aiPick, now()).changes === 1;
+    addPick({ userId, matchId, pick, aiPick, match = {} }) {
+      return db.prepare(`INSERT OR IGNORE INTO picks (user_id, match_id, pick, ai_pick, home, away, competition, starts_at, created_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(userId, String(matchId), pick, aiPick, match.home || null, match.away || null,
+          match.competition || null, match.startsAt || null, now()).changes === 1;
     },
+    recentPicks: (u, limit = 20) =>
+      db.prepare('SELECT * FROM picks WHERE user_id = ? ORDER BY COALESCE(starts_at, created_at) DESC LIMIT ?').all(u, limit),
     pickedIds: (u) => db.prepare('SELECT match_id FROM picks WHERE user_id = ?').all(u).map((r) => r.match_id),
     pickCount: (u) => db.prepare('SELECT COUNT(*) c FROM picks WHERE user_id = ?').get(u).c,
-    gradePick(u, m, correct, aiCorrect) {
-      db.prepare('UPDATE picks SET graded = 1, correct = ?, ai_correct = ? WHERE user_id = ? AND match_id = ?')
-        .run(Number(correct), Number(aiCorrect), u, String(m));
+    gradePick(u, m, correct, aiCorrect, result = {}) {
+      db.prepare('UPDATE picks SET graded = 1, correct = ?, ai_correct = ?, result_score = ?, result_outcome = ? WHERE user_id = ? AND match_id = ?')
+        .run(Number(correct), Number(aiCorrect), result.score || null, result.outcome || null, u, String(m));
     },
 
     weeklyTop(sinceMs, limit = 10) {
@@ -142,6 +154,7 @@ function openDb(dbPath) {
           SUM(u.wa_phone IS NOT NULL) AS leads,
           SUM(u.wa_phone IS NOT NULL AND u.wa_es_mobile = 1) AS es_leads,
           SUM(u.optout_at IS NOT NULL) AS optouts,
+          SUM(u.entry = 'webapp') AS via_app,
           SUM(u.blocked) AS blocked
         FROM users u GROUP BY u.src, u.variant ORDER BY starts DESC`).all();
     },

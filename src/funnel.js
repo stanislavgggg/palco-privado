@@ -26,6 +26,9 @@ function weekStart(ms) {
 
 function createFunnel({ db, api, config, tg, http = null, now = () => Date.now() }) {
   async function send(userId, html, extra = {}) {
+    // Mini-app users who haven't allowed the bot to write to them: don't message, don't mark blocked.
+    const u = db.getUser(userId);
+    if (u && u.pm_allowed === 0) return false;
     try {
       await tg.send(userId, html, { parse_mode: 'HTML', disable_web_page_preview: true, ...extra });
       return true;
@@ -89,27 +92,69 @@ function createFunnel({ db, api, config, tg, http = null, now = () => Date.now()
     }
   }
 
-  async function saveLead(user, phone, source) {
-    const changed = user.wa_phone && user.wa_phone !== phone;
+  // Pure: saves the number + webhook; no Telegram messages. Used by the bot and the mini app.
+  async function recordLead(user, phone, source) {
+    const changed = Boolean(user.wa_phone && user.wa_phone !== phone);
     db.setUser(user.id, {
       wa_phone: phone, wa_phone_source: source, wa_es_mobile: isSpanishMobile(phone) ? 1 : 0,
       wa_saved_at: user.wa_saved_at || now(), wa_state: 'saved',
     });
     db.cancelJobs(user.id, ['wa_ask']);
     db.logEvent(user.id, changed ? 'lead_updated' : 'lead', { source, es_mobile: isSpanishMobile(phone) });
-    await send(user.id, T.waSaved(phone, config), kb.removeReply());
-    if (config.communityUrl && !changed) await send(user.id, '👇', kb.community(config));
     const u = db.getUser(user.id);
     await notifyWebhook(changed ? 'lead_updated' : 'lead', {
       telegram_id: u.id, username: u.username, first_name: u.first_name, phone, phone_source: source,
-      es_mobile: Boolean(u.wa_es_mobile), src: u.src, variant: u.variant, consent_at: u.consent_at,
+      es_mobile: Boolean(u.wa_es_mobile), src: u.src, variant: u.variant, entry: u.entry, consent_at: u.consent_at,
       consent_version: u.consent_version, picks: db.pickCount(u.id), score_user: u.score_user, score_ai: u.score_ai,
     });
+    return { changed };
+  }
+
+  async function saveLead(user, phone, source) {
+    const { changed } = await recordLead(user, phone, source);
+    await send(user.id, T.waSaved(phone, config), kb.removeReply());
+    if (config.communityUrl && !changed) await send(user.id, '👇', kb.community(config));
+  }
+
+  // Pure: validates and stores a pick. Returns { status, match }.
+  // status: ok | invalid | locked | already
+  async function makePick(user, matchId, pick) {
+    const m = await api.byId(matchId);
+    if (!m || !['home', 'draw', 'away'].includes(pick) || !api.isUsable(m)) return { status: 'invalid', match: m };
+    if (m.startsAt - LOCK_BEFORE <= now() || m.result) return { status: 'locked', match: m };
+    if (!db.addPick({ userId: user.id, matchId: m.id, pick, aiPick: m.consensus, match: m })) {
+      return { status: 'already', match: m, existing: db.getPick(user.id, m.id) };
+    }
+    db.logEvent(user.id, 'pick', { match: m.id, agree: pick === m.consensus, entry: user.entry });
+    db.schedule(user.id, 'grade', m.startsAt + 2 * HOUR, m.id); // football: ~2h to final whistle
+    return { status: 'ok', match: m };
+  }
+
+  function scheduleNewUser(userId) {
+    const t0 = now();
+    for (let d = 1; d <= DAILY_DAYS; d++) db.schedule(userId, 'daily', t0 + d * DAY, `d${d}`);
+    db.schedule(userId, 'wa_ask', t0 + 26 * HOUR, '1');
+    db.schedule(userId, 'wa_ask', t0 + 72 * HOUR, '2');
   }
 
   return {
     variantFor,
     parseSource,
+    // used by the mini app (src/webapp.js)
+    core: {
+      slate, makePick, recordLead, scheduleNewUser, weekStart, LOCK_BEFORE, MAX_WA_ASKS,
+      // Pure opt-out: deletes the number, withdraws consent, notifies the webhook.
+      async optout(user) {
+        const phone = user.wa_phone;
+        db.setUser(user.id, {
+          wa_phone: null, wa_phone_source: null, wa_es_mobile: null, optout_at: now(), wa_state: 'optout', consent_at: null,
+        });
+        db.cancelJobs(user.id, ['wa_ask']);
+        db.logEvent(user.id, 'optout', { entry: 'webapp' });
+        if (phone) await notifyWebhook('optout', { telegram_id: user.id, phone });
+        return { hadPhone: Boolean(phone) };
+      },
+    },
 
     async onStart(from, payload) {
       const src = parseSource(payload);
@@ -117,12 +162,8 @@ function createFunnel({ db, api, config, tg, http = null, now = () => Date.now()
         id: from.id, username: from.username, first_name: from.first_name, src, variant: variantFor(from.id),
       });
       db.logEvent(user.id, isNew ? 'start' : 'restart', { src });
-      if (isNew) {
-        const t0 = now();
-        for (let d = 1; d <= DAILY_DAYS; d++) db.schedule(user.id, 'daily', t0 + d * DAY, `d${d}`);
-        db.schedule(user.id, 'wa_ask', t0 + 26 * HOUR, '1');
-        db.schedule(user.id, 'wa_ask', t0 + 72 * HOUR, '2');
-      }
+      if (user.pm_allowed === 0) db.setUser(user.id, { pm_allowed: 1, blocked: 0 }); // opened the bot chat
+      if (isNew) scheduleNewUser(user.id);
       await send(user.id, T.intro());
       return askNext(user.id);
     },
@@ -131,14 +172,11 @@ function createFunnel({ db, api, config, tg, http = null, now = () => Date.now()
 
     async onPick(from, matchId, pick) {
       const user = ensureUser(from);
-      const m = await api.byId(matchId);
-      if (!m || !['home', 'draw', 'away'].includes(pick)) return askNext(user.id);
-      if (m.startsAt - LOCK_BEFORE <= now() || m.result) return send(user.id, T.locked(), kb.slate());
-      if (!db.addPick({ userId: user.id, matchId: m.id, pick, aiPick: m.consensus })) {
-        return send(user.id, T.already(m, db.getPick(user.id, m.id)), kb.slate());
-      }
-      db.logEvent(user.id, 'pick', { match: m.id, agree: pick === m.consensus });
-      db.schedule(user.id, 'grade', m.startsAt + 2 * HOUR, m.id); // football: ~2h to final whistle
+      const r = await makePick(user, matchId, pick);
+      if (r.status === 'invalid') return askNext(user.id);
+      if (r.status === 'locked') return send(user.id, T.locked(), kb.slate());
+      if (r.status === 'already') return send(user.id, T.already(r.match, r.existing), kb.slate());
+      const m = r.match;
       const { open } = await openFor(user.id);
       await send(user.id, T.reveal(m, pick), kb.afterPick(open.length > 0));
       if (user.variant === 'A' && db.pickCount(user.id) === 1) await askWa(user.id, 'first_pick');
@@ -223,7 +261,7 @@ function createFunnel({ db, api, config, tg, http = null, now = () => Date.now()
         if (!m.result) return job.attempts < 12 ? 'retry:30' : 'skip';
         const correct = p.pick === m.result.outcome;
         const aiCorrect = p.ai_pick === m.result.outcome;
-        db.gradePick(user.id, m.id, correct, aiCorrect);
+        db.gradePick(user.id, m.id, correct, aiCorrect, m.result);
         const streak = correct ? user.streak + 1 : 0;
         db.setUser(user.id, {
           streak, best_streak: Math.max(user.best_streak, streak),

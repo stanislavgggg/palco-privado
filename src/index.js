@@ -4,6 +4,7 @@ const config = require('./config');
 const { openDb } = require('./db');
 const { createApi } = require('./api');
 const { createFunnel } = require('./funnel');
+const { createWebapp } = require('./webapp');
 
 if (!config.botToken) {
   console.error('BOT_TOKEN is not set');
@@ -54,7 +55,7 @@ bot.command('stats', safe(async (ctx) => {
   const rows = db.stats();
   if (!rows.length) return ctx.reply('No users yet.');
   return ctx.reply(rows.map((r) =>
-    `${r.src} [${r.variant}]: start ${r.starts} · picked ${r.pickers} · asked ${r.asked} · leads ${r.leads} (ES mobile ${r.es_leads}) · optout ${r.optouts} · blocked ${r.blocked}`,
+    `${r.src} [${r.variant}]: start ${r.starts} · picked ${r.pickers} · asked ${r.asked} · leads ${r.leads} (ES mobile ${r.es_leads}) · optout ${r.optouts} · via app ${r.via_app} · blocked ${r.blocked}`,
   ).join('\n'));
 }));
 // /export            → all leads
@@ -74,8 +75,19 @@ bot.on('text', safe((ctx) => {
 }));
 
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
 app.get('/health', (_req, res) => res.json({ ok: true }));
-app.listen(config.port, () => console.log(`[http] listening on :${config.port}`));
+app.use(createWebapp({ db, api, funnel, config })); // mini app: /app/ + /api/*
+app.listen(config.port, () => console.log(`[http] listening on :${config.port}${config.webappUrl ? ` · mini app ${config.webappUrl}` : ''}`));
+
+// "Jugar" menu button next to the chat input opens the mini app.
+if (config.webappUrl) {
+  bot.telegram.setChatMenuButton({ menuButton: { type: 'web_app', text: 'Jugar', web_app: { url: config.webappUrl } } })
+    .catch((e) => console.error('[bot] menu button', e.message));
+} else {
+  console.warn('[webapp] PUBLIC_URL is empty — mini app links and the menu button are disabled');
+}
 
 let ticking = false;
 setInterval(async () => {
