@@ -1,25 +1,29 @@
 // Offline tests: no Telegram, no network. Run: npm test
 const assert = require('assert');
-const http = require('http');
 
 const realNow = Date.now;
 let clock = realNow();
-Date.now = () => clock; // one virtual clock for db, api and funnel
+Date.now = () => clock;
 
-process.env.SETS_MOCK = '1';
-const config = { ...require('../src/config'), setsMock: true, dbPath: ':memory:', publicUrl: 'https://bot.test',
-  coinplayLink: 'https://coinplay.example/?ref=abc', postbackSecret: 's3cret', bonusText: 'BONUS', coinsText: 'USDT' };
+const config = {
+  ...require('../src/config'),
+  setsMock: true, dbPath: ':memory:', leagues: ['LaLiga', 'Champions League'], minShare: 0.5,
+  communityUrl: 'https://t.me/+test', communityLabel: 'Apuestas Guru', privacyUrl: 'https://example.test/privacy',
+  companyName: 'UAB "GG Group Media"', consentVersion: 'wa-v1', leadWebhookUrl: 'https://hook.test/lead',
+};
 
 const { openDb } = require('../src/db');
-const { createApi } = require('../src/api');
-const { createFunnel, winnerOf } = require('../src/funnel');
-const { createServer } = require('../src/server');
+const { createApi, normalizeSet } = require('../src/api');
+const { createFunnel } = require('../src/funnel');
+const { normalizePhone, isSpanishMobile } = require('../src/phone');
 
 const sent = [];
+const hooks = [];
 const tg = { async send(id, html, extra) { sent.push({ id, html, extra }); } };
+const http = { async post(url, body) { hooks.push({ url, body }); } };
 const db = openDb(':memory:');
 const api = createApi(config, { cacheMs: Infinity });
-const funnel = createFunnel({ db, api, config, tg, now: () => clock });
+const funnel = createFunnel({ db, api, config, tg, http, now: () => clock });
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -30,9 +34,8 @@ async function t(name, fn) {
 }
 const last = () => sent[sent.length - 1];
 const mine = (id, re) => sent.filter((s) => s.id === id && re.test(s.html));
-const buttons = (m) => (m.extra.reply_markup?.inline_keyboard || []).flat();
+const inline = (m) => (m.extra.reply_markup?.inline_keyboard || []).flat();
 
-// Make a fixture match "finished" with a given winner for the rest of the run.
 const results = {};
 const origById = api.byId;
 api.byId = async (id) => {
@@ -41,148 +44,148 @@ api.byId = async (id) => {
 };
 
 (async () => {
-  const A = { id: 1000, first_name: 'Alex' }; // even -> variant A (intro)
-  const B = { id: 1001, first_name: 'Bo' };   // odd  -> variant B (question first)
+  const A = { id: 2000, first_name: 'Ana' };   // even -> WA ask after first pick
+  const B = { id: 2001, first_name: 'Borja' }; // odd  -> WA ask after first result
 
-  await t('variant A: intro, source tag, daily + offer jobs', async () => {
-    await funnel.onStart(A, 'esp_q1');
-    assert.match(last().html, /better than AI/);
-    assert.strictEqual(db.getUser(1000).src, 'esp_q1');
-    const jobs = db.raw.prepare('SELECT kind, COUNT(*) c FROM jobs WHERE user_id = 1000 GROUP BY kind').all();
-    assert.deepStrictEqual(Object.fromEntries(jobs.map((j) => [j.kind, j.c])), { daily: 14, offer: 1 });
+  await t('phone normalization (ES)', async () => {
+    assert.strictEqual(normalizePhone('612 345 678'), '+34612345678');
+    assert.strictEqual(normalizePhone('0034 712-345-678'), '+34712345678');
+    assert.strictEqual(normalizePhone('34612345678'), '+34612345678');
+    assert.strictEqual(normalizePhone('+44 7700 900123'), '+447700900123');
+    assert.strictEqual(normalizePhone('123'), null);
+    assert.ok(isSpanishMobile('+34612345678'));
+    assert.ok(!isSpanishMobile('+34912345678')); // landline
   });
 
-  await t('variant B: first question right away; slate skips low-confidence', async () => {
-    await funnel.onStart(B, 'esp_q2');
+  await t('normalizer: 3-way outcomes, draw, score -> outcome', async () => {
+    const m = normalizeSet({ id: 'x', sport: 'football', home: 'A', away: 'B', start_time: 1893456000,
+      predictions: { m1: { pick: 'X' }, m2: { pick: 'draw' }, m3: { pick: 'A' } }, result: { score: '1-1' } });
+    assert.strictEqual(m.consensus, 'draw');
+    assert.strictEqual(m.agree, 2);
+    assert.strictEqual(m.result.outcome, 'draw');
+  });
+
+  await t('slate: football only, leagues filter, no low-confidence', async () => {
+    await funnel.onStart(A, 'es_q1');
     const q = last();
-    assert.match(q.html, /Match 1 of 4: Team Alpha vs Team Bravo/);
-    assert.deepStrictEqual(buttons(q).map((b) => b.callback_data), ['pick:cs2-001:a', 'pick:cs2-001:b']);
+    assert.match(q.html, /Partido 1 de 2: Equipo Rojo – Equipo Azul/);
+    assert.match(q.html, /LaLiga/);
+    assert.deepStrictEqual(inline(q).map((b) => b.callback_data), ['pick:fb-001:home', 'pick:fb-001:draw', 'pick:fb-001:away']);
+    assert.ok(sent.some((s) => s.id === 2000 && /Bienvenido al Palco Privado/.test(s.html)));
   });
 
-  await t('pick against AI -> "bold call" reveal; next question follows', async () => {
-    await funnel.onSlate(A);
-    await funnel.onPick(A, 'cs2-001', 'b');
-    assert.match(last().html, /Bold call.*Team Bravo.*3 of 4 models went <b>Team Alpha/s);
-    assert.ok(buttons(last()).some((b) => b.callback_data === 'slate'));
-    await funnel.onSlate(A);
-    assert.match(last().html, /Match 2 of 4: Team Golf vs Team Hotel/);
+  await t('variant A: reveal, then WhatsApp ask with consent text after first pick', async () => {
+    await funnel.onPick(A, 'fb-001', 'draw');
+    const reveal = mine(2000, /Te la juegas/)[0];
+    assert.match(reveal.html, /Elegiste <b>Empate<\/b> — 3 de 4 modelos van con <b>Equipo Rojo/);
+    const ask = last();
+    assert.match(ask.html, /WhatsApp/);
+    assert.match(ask.html, /18 años o más/);
+    assert.match(ask.html, /GG Group Media/);
+    assert.match(ask.html, /\/baja/);
+    assert.match(ask.html, /example\.test\/privacy/);
+    assert.deepStrictEqual(inline(ask).map((b) => b.callback_data), ['wa:yes', 'wa:later']);
+    assert.strictEqual(db.getUser(2000).wa_asks, 1);
   });
 
-  await t('pick with AI -> agreement; duplicate pick refused', async () => {
-    await funnel.onPick(A, 'dota-001', 'a');
-    assert.match(last().html, /You and the AI agree: <b>Team Golf/);
-    await funnel.onPick(A, 'dota-001', 'b');
-    assert.match(last().html, /already picked <b>Team Golf/);
-    assert.strictEqual(db.getPick(1000, 'dota-001').pick, 'Team Golf');
+  await t('consent -> share-contact keyboard; someone else\'s contact refused; own contact saved', async () => {
+    await funnel.onWa(A, 'yes');
+    assert.ok(db.getUser(2000).consent_at);
+    const kbd = last().extra.reply_markup.keyboard;
+    assert.ok(kbd[0][0].request_contact);
+    await funnel.onContact(A, { phone_number: '34600111222', user_id: 999 });
+    assert.match(last().html, /no es tuyo/);
+    await funnel.onContact(A, { phone_number: '34600111222', user_id: 2000 });
+    const u = db.getUser(2000);
+    assert.strictEqual(u.wa_phone, '+34600111222');
+    assert.strictEqual(u.wa_es_mobile, 1);
+    assert.ok(mine(2000, /Guardado: <b>\+34600111222/).length === 1);
+    assert.strictEqual(hooks.length, 1);
+    assert.strictEqual(hooks[0].body.type, 'lead');
+    assert.strictEqual(hooks[0].body.src, 'es_q1');
+    assert.strictEqual(hooks[0].body.consent_version, 'wa-v1');
   });
 
-  await t('B picks with AI on cs2-001', async () => {
-    await funnel.onPick(B, 'cs2-001', 'a');
-    assert.match(last().html, /agree/);
+  await t('typed number after saving updates it (other WhatsApp)', async () => {
+    await funnel.onText(A, '711 222 333');
+    assert.strictEqual(db.getUser(2000).wa_phone, '+34711222333');
+    assert.strictEqual(hooks[hooks.length - 1].body.type, 'lead_updated');
   });
 
-  await t('picks lock 5 min before start', async () => {
-    clock += 86 * MIN; // cs2-001 at +90
-    await funnel.onPick({ id: 3003 }, 'cs2-001', 'a');
-    assert.match(last().html, /locked/);
-    assert.strictEqual(db.getPick(3003, 'cs2-001'), undefined);
+  await t('variant B: no ask on pick; "later" works; typed invalid number re-prompts', async () => {
+    await funnel.onStart(B, 'es_q2');
+    await funnel.onPick(B, 'fb-001', 'home');
+    assert.strictEqual(mine(2001, /WhatsApp/).length, 0);
+    assert.match(last().html, /Coincides con la IA/);
   });
 
-  await t('grade waits for result, then: A wins vs AI, gets streak, score and first-win offer', async () => {
-    clock += 70 * MIN; // past cs2-001 +60m
+  await t('picks lock 5 min before kickoff', async () => {
+    clock += 86 * MIN;
+    await funnel.onPick({ id: 3003 }, 'fb-001', 'home');
+    assert.match(last().html, /cerrado/);
+  });
+
+  await t('grading waits for result; A misses on draw pick, B hits; B gets WA ask after first result', async () => {
+    clock += 2 * HOUR + 10 * MIN; // past kickoff + 2h
     let r = await funnel.tick();
     assert.ok(r.some((x) => x.kind === 'grade' && x.res.startsWith('retry')));
-    results['cs2-001'] = { score: '1:2', winner: 'Team Bravo', correct: false };
+    results['fb-001'] = { score: '2-1', outcome: 'home' };
     clock += 31 * MIN;
     await funnel.tick();
-    const g = mine(1000, /You called it · AI missed/)[0];
-    assert.ok(g, 'graded message');
-    assert.match(g.html, /You 1 – 0 AI/);
-    assert.match(g.html, /Streak: 1/);
-    assert.match(g.html, /This week: #1 of 1/);
-    const win = mine(1000, /Called it\. If you'd rather back/)[0];
-    assert.ok(win && /18\+/.test(win.html) && /BONUS/.test(win.html));
-    assert.ok(buttons(win)[0].url.startsWith('https://bot.test/r?u=1000&m=cs2-001&s=win1'));
-    const b = mine(1001, /Not this time · AI missed/)[0];
-    assert.ok(b && /You 0 – 0 AI/.test(b.html));
-    assert.strictEqual(mine(1001, /Called it\./).length, 0);
+    const ga = mine(2000, /Esta vez no · la IA acertó/)[0];
+    assert.ok(ga && /Tú 0 – 1 IA/.test(ga.html));
+    const gb = mine(2001, /Acertaste · la IA acertó/)[0];
+    assert.ok(gb && /Tú 1 – 1 IA/.test(gb.html) && /Racha: 1/.test(gb.html));
+    assert.strictEqual(mine(2001, /pick de la IA por WhatsApp/).length, 1);
   });
 
-  await t('winner derived from "correct" when export has no winner', async () => {
-    results['dota-001'] = { score: '2:0', correct: true };
-    const m = await api.byId('dota-001');
-    assert.strictEqual(winnerOf(m), 'Team Golf');
-    clock += 3 * HOUR;
+  await t('B: later, then cancel flow and invalid input', async () => {
+    await funnel.onWa(B, 'later');
+    assert.match(last().html, /Sin problema/);
+    await funnel.onWa(B, 'yes');
+    await funnel.onText(B, 'hola');
+    assert.match(last().html, /no parece válido/);
+    await funnel.onText(B, 'Cancelar');
+    assert.match(last().html, /Cancelado/);
+    assert.strictEqual(db.getUser(2001).wa_phone, null);
+  });
+
+  await t('late WA asks only for engaged users without a number, max 3 asks', async () => {
+    await funnel.onStart({ id: 4004 }, 'es_q3'); // never picks
+    clock += 3 * 24 * HOUR;
     await funnel.tick();
-    const g = mine(1000, /Team Golf 2:0 Team Hotel/)[0];
-    assert.ok(g && /You 2 – 1 AI/.test(g.html) && /Streak: 2/.test(g.html));
-    assert.strictEqual(mine(1000, /Called it\. If you'd rather/).length, 1, 'first-win offer only once');
+    assert.strictEqual(mine(4004, /pick de la IA por WhatsApp/).length, 0);
+    assert.ok(db.getUser(2001).wa_asks <= 3);
+    assert.strictEqual(mine(2000, /pick de la IA por WhatsApp/).length, 1, 'A already has a number');
   });
 
-  await t('weekly top lists players with correct picks', async () => {
-    await funnel.onTop(B);
-    assert.match(last().html, /🥇 Alex — 2\/2/);
-    assert.match(last().html, /No prizes/);
-    assert.doesNotMatch(last().html, /You: #/); // Bo has no correct picks
+  await t('/baja deletes the number and notifies the webhook', async () => {
+    await funnel.onOptout(A);
+    const u = db.getUser(2000);
+    assert.strictEqual(u.wa_phone, null);
+    assert.ok(u.optout_at);
+    assert.strictEqual(hooks[hooks.length - 1].body.type, 'optout');
+    assert.strictEqual(hooks[hooks.length - 1].body.phone, '+34711222333');
   });
 
-  await t('30h offer: skipped for first-win user, skipped for non-picker, sent to engaged non-winner', async () => {
-    await funnel.onStart({ id: 4004, first_name: 'Cy' }, 'esp_q3'); // never picks
-    clock += 30 * HOUR;
-    await funnel.tick();
-    assert.strictEqual(mine(1000, /Your picks, your read/).length, 0);
-    assert.strictEqual(mine(4004, /Your picks, your read/).length, 0);
-    assert.strictEqual(mine(1001, /Your picks, your read/).length, 1);
+  await t('export CSV by source + stats', async () => {
+    await funnel.onWa({ id: 5005, first_name: '=HYPERLINK("x")' }, 'yes');
+    await funnel.onText({ id: 5005 }, '+34 655 444 333');
+    const all = funnel.leadsCsv();
+    assert.strictEqual(all.count, 1);
+    assert.match(all.csv, /'=HYPERLINK/); // formula guard
+    assert.strictEqual(funnel.leadsCsv('es_q1').count, 0); // A opted out
+    const st = db.stats().find((r) => r.src === 'es_q1');
+    assert.strictEqual(st.optouts, 1);
   });
 
-  await t('daily slate push only when matches are open', async () => {
-    const dailies = sent.filter((s) => /open for picks today/.test(s.html));
-    // fixture matches are all in the past by now -> no daily pushes
-    assert.strictEqual(dailies.length, 0);
-  });
-
-  await t('/r click + reg/ftd postbacks; FTD stops Coinplay pushes', async () => {
-    const u = new URL(funnel.onClick('1001', { msg: 'offer30h' }));
-    assert.strictEqual(u.searchParams.get('click_id'), '1001');
-    assert.strictEqual(u.searchParams.get('sub1'), 'esp_q2');
-    clock += 3 * HOUR + MIN;
-    await funnel.tick();
-    assert.strictEqual(mine(1001, /Registration takes a minute/).length, 1);
-    funnel.onPostback('1001', 'reg');
-    clock += 31 * MIN;
-    await funnel.tick();
-    assert.strictEqual(mine(1001, /account is ready/).length, 1);
-    funnel.onPostback('1001', 'ftd');
-    clock += 2 * 24 * HOUR;
-    await funnel.tick();
-    assert.strictEqual(mine(1001, /account is set/).length, 0);
-  });
-
-  await t('blocked user: 403 cancels all jobs', async () => {
+  await t('blocked user: 403 cancels jobs', async () => {
     const saved = tg.send;
     tg.send = async () => { const e = new Error('Forbidden'); e.response = { error_code: 403 }; throw e; };
-    await funnel.onStart({ id: 5006 }, 'x');
+    await funnel.onStart({ id: 6006 }, 'x');
     tg.send = saved;
-    assert.strictEqual(db.getUser(5006).blocked, 1);
-    assert.strictEqual(db.raw.prepare('SELECT COUNT(*) c FROM jobs WHERE user_id = 5006 AND done = 0').get().c, 0);
-  });
-
-  await t('HTTP /r and postback secret', async () => {
-    const srv = createServer({ funnel, db, config }).listen(0);
-    const port = srv.address().port;
-    const get = (p) => new Promise((res) => http.get({ port, path: p, agent: false }, (r) => {
-      let b = ''; r.on('data', (c) => (b += c)); r.on('end', () => res({ status: r.statusCode, loc: r.headers.location, body: b }));
-    }));
-    assert.match((await get('/r?u=1000&s=win1')).loc, /click_id=1000/);
-    assert.strictEqual((await get('/postback/coinplay?click_id=1000&event=reg&secret=no')).status, 403);
-    assert.deepStrictEqual(JSON.parse((await get('/postback/coinplay?click_id=1000&event=reg&secret=s3cret')).body), { ok: true });
-    srv.close();
-  });
-
-  await t('stats: pickers per source', async () => {
-    const rows = db.stats();
-    assert.strictEqual(rows.find((r) => r.src === 'esp_q1').pickers, 1);
-    assert.strictEqual(rows.find((r) => r.src === 'esp_q3').pickers, 0);
+    assert.strictEqual(db.getUser(6006).blocked, 1);
+    assert.strictEqual(db.raw.prepare('SELECT COUNT(*) c FROM jobs WHERE user_id = 6006 AND done = 0').get().c, 0);
   });
 
   Date.now = realNow;

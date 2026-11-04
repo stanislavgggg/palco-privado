@@ -1,47 +1,70 @@
-# Esports Pick'em vs AI · by Coinplay — Telegram gasket bot
+# Palco Privado · Tú vs IA — football pick'em for Spain (GG Group)
 
-Second funnel approach. Instead of "read our AI picks", the user **plays**: picks the winner of today's CS2 / Dota 2 / Valorant matches, then sees what the AI models picked. After each match — right or wrong, streak, and the running score **You vs AI**. Coinplay appears when the user called a match right: "back your next call".
+Spanish version of the "You vs AI" game, for the **GG Group** Spain line (Coinplay is geoblocked in Spain and is not mentioned anywhere in this bot).
 
-Built from competitor patterns seen in SPY_TG (Nov 2026):
-- match-question headlines ("will X beat Y?") — the largest esports bettor ran 355 such creatives;
-- a daily reason to come back (case-opening bots in CS2: free daily case);
-- streaks as social proof (esports tipster channels) — here it's the user's own streak, not a claim.
+The user picks how LaLiga / Champions League matches end (home / draw / away), then sees what the AI models picked and why. After each match: right or wrong, streak, the score **Tú vs IA**, weekly rank. The goal of the funnel is a **WhatsApp number with explicit consent** for the LeadDeus follow-up.
+
+No betting operator, bonus or prize inside the bot: it's a free football game. Operator messaging happens later over WhatsApp and must follow Spanish gambling-advertising rules — check with legal before those messages go out.
 
 ## Flow
 
-1. `/start <source>` — stores the ad tag; A/B by telegram_id: **A** (even) intro screen → "Make my picks"; **B** (odd) first match question right away.
-2. **Slate:** up to 5 matches starting in the next 24 h, majority consensus only, no "needs a human" placeholders. Picks close 5 min before start. One pick per match.
-3. **Reveal** right after the pick: "You and the AI agree" or "Bold call — 3 of 4 models went …" + the main reason.
-4. **Grading** ~1 h after start (re-checks every 30 min up to ~6 h): result, ✅/❌ for the user and for the AI, score You–AI, streak, weekly rank.
-5. **First correct pick** → first Coinplay message with a personal `/r` link (shown once).
-6. **+30 h offer** only to users who picked but haven't won yet; skipped for non-pickers.
-7. **Daily slate push** for 14 days — only when there are open matches the user hasn't picked.
-8. **Stage pushes** after a click: no reg +3 h · reg without deposit +30 min, +24 h · all Coinplay pushes stop after FTD.
-9. `/top` — weekly leaderboard (correct / graded). **No prizes** — bragging rights only (a prize would turn it into a sweepstake with its own legal rules per country). `/me` — own score. `/stats` — admins: starts, users who picked, clicks, regs, FTDs by source × variant.
+1. `/start <source>` → intro + first match question (up to 5 matches in the next 48 h; only competitions in `LEAGUES`; only matches where at least `MIN_SHARE` of models agree; "needs a human" placeholders never shown). Picks close 5 min before kickoff. Times in Europe/Madrid.
+2. **Reveal** after each pick: "Coincides con la IA" or "Te la juegas — 3 de 4 modelos van con …" + the AI's main reason.
+3. **Grading** ~2 h after kickoff (re-checks every 30 min up to ~6 h): result, ✅/❌ for the user and the AI, Tú–IA score, streak, weekly rank. Draws count as an outcome.
+4. **WhatsApp ask — A/B by telegram_id:** **A** (even) right after the first pick · **B** (odd) after the first graded result. Plus late asks at +26 h and +72 h for users who picked but haven't left a number. Max 3 asks per user.
+5. **Consent:** one tap "Acepto (18+)" on a message that states the 18+ confirmation, the purpose (football picks and commercial messages over WhatsApp), the company (`COMPANY_NAME`), how to opt out (/baja or "BAJA"), and the privacy link (`PRIVACY_URL`). Consent time and version are stored.
+6. **Number:** Telegram's native "share my number" button (only the user's own contact is accepted) or typed (612 345 678 → +34612345678). After saving, the user can type another number if their WhatsApp differs. Then a button to the community (`COMMUNITY_URL`).
+7. **Daily push** for 14 days when matches are open.
+8. **/baja** deletes the number, withdraws consent and sends an `optout` event to the webhook.
 
-## Ads for this bot (EN, ≤160 chars, tag `?start=esp_q<code>`)
+## Leads
 
-| Code | Text | Angle |
-| --- | --- | --- |
-| q1 | [Team A] vs [Team B] tonight. Who wins? Make your call, then see what 4 AI models picked 🎮 | Match question |
-| q2 | Think you read CS2 better than AI? Pick today's winners and keep score: You vs AI. | Challenge |
-| q3 | 5 esports matches today. Call them before they start — results and your streak after each game. | Daily slate |
-| q4 | The AI models split on tonight's match. Which side are you on? | Curiosity |
-| q5 | For people who call the winner before the first round. Daily esports pick'em, free. | Identification |
-| q6 | Your friends guess. You keep score. Pick CS2, Dota 2 and Valorant winners, track your streak 🎯 | Status |
+- **Webhook (optional):** every new / updated lead and every opt-out is POSTed as JSON to `LEAD_WEBHOOK_URL` (LeadDeus, Make.com…): `telegram_id, username, first_name, phone, phone_source, es_mobile, src, variant, consent_at, consent_version, picks, score_user, score_ai`.
+- **/export** (admins) — CSV of all leads; **/export <source>** — one source only, for the batch testing by source (never mix sources in one batch).
+- **/stats** — by source × variant: starts, users who picked, asked, leads, Spanish mobile leads, opt-outs, blocked.
 
-Fill `[Team A] vs [Team B]` from the export on the day of the show; one tag per ad / host channel.
+## Bot profile
 
-## HTTP
+Name chosen against SPY_TG (Nov 2026): in Spanish Telegram ads "club privado", "grupo privado", "exclusivo" and "VIP" are used by trading-signal and paid-tipster channels with fake scarcity ("30 plazas gratis y luego 19,99 €"). "Palco Privado" keeps the private-club feel with a football image, and the copy says the opposite of those channels: no gifted tips, no limited spots.
 
-Same as the first bot: `/r?u=<tg_id>&m=<match>&s=<msg>` → Coinplay with `click_id`, `sub1..3`; `/postback/coinplay?click_id={click_id}&event=reg|ftd&secret=…`; `/health`.
+- **Name:** Palco Privado · Tú vs IA
+- **Username (check availability):** `@PalcoPrivadoBot`, `@palco_privado_bot`, `@palcoprivado_ia_bot`
+- **About (≤120):** Tu palco privado de LaLiga y Champions: tú eliges el resultado, 4 modelos de IA eligen el suyo. 18+
+- **Description (≤512):**
+  > Bienvenido al Palco Privado.
+  >
+  > Aquí no te regalamos pronósticos: los haces tú. Cada jornada eliges cómo acaban los partidos de LaLiga y Champions y después ves qué eligieron nuestros modelos de IA y por qué.
+  >
+  > Tras cada partido: acierto o fallo, tu racha y el marcador Tú vs IA. Top semanal del palco.
+  >
+  > Gratis. Sin premios ni plazas limitadas: entra quien sabe de fútbol. 18+
+- **Avatar:** dark-green velvet of a stadium box, a large football half made of glowing neural-network lines. No text.
+
+## Ads (ES, ≤160 chars, tag `?start=es_p<code>`)
+
+| Code | Text | Angle | Target |
+| --- | --- | --- | --- |
+| p1 | Entra al Palco Privado: tú eliges cómo acaba [partido], 4 modelos de IA eligen el suyo. El marcador manda ⚽ | Match + mechanism | football channels |
+| p2 | Aquí no se regalan pronósticos: los haces tú. Elige resultados de LaLiga y compite contra la IA. | Contrast with tipsters | football channels |
+| p3 | Todos dicen que lo vieron venir. En el Palco se apunta: tu pronóstico, el de la IA y el resultado final. | Identification | broad |
+| p4 | ¿Lees LaLiga mejor que una IA? Palco Privado: cada jornada, tú contra 4 modelos. Gratis ⚽ | Challenge | broad |
+| p5 | Sin plazas limitadas ni «cuotones» regalados. Eliges resultado, la IA elige el suyo y el partido decide. | Honesty | football channels |
+| p6 | La IA ya tiene su resultado para [partido]. ¿Y tú? Haz tu pronóstico en el Palco y compara. | Curiosity | broad |
+| p7 | Para los que analizan antes del pitido inicial: elige el resultado y compáralo con 4 modelos de IA. | Identification | broad |
+| p8 | Tu racha contra la IA empieza la próxima jornada. Palco Privado: gratis, un toque por partido. | Ease | broad |
+
+Fill `[partido]` with a real fixture on the day; on Monday–Tuesday prefer p3, p4, p7, p8. If moderation rejects "cuotones" in p5, use "sin pronósticos de pago". No ad uses "apuesta", bonuses or scarcity — it's a free game open to everyone.
+
+Start test: contrast (p2, p5 in football channels) vs challenge (p4, p8 broad) vs identification (p3, p7). Judge by cost per WhatsApp number; export each batch with `/export es_p<code>`.
+
+## Data source
+
+`SETS_URL` + `SETS_TOKEN` — the football predictions export. Football has three outcomes; `src/api.js → normalizeSet()` maps picks to home / draw / away (team name, "1/X/2", "draw", "empate"…) and takes the result from `result.winner`/`outcome` or from the score ("2-1"). Check it against one real record before launch; `SETS_MOCK=1` runs on `fixtures/sets.sample.json`.
 
 ## Deploy (Railway)
 
-Volume at `/data`, variables from `.env.example`, start `npm start` (long polling). Same `sets.json` mapping note as the first bot: check `src/api.js → normalizeSet()` against one real export record; this bot also needs `result.winner` (or `result.correct` to derive it).
-
-Can run next to `esports-ai-picks-bot` — separate bot token, separate database, same Coinplay postback URL pattern on its own domain.
+Volume at `/data`, variables from `.env.example` (set `PRIVACY_URL` before collecting numbers — the bot warns at startup if it's empty), `npm start` (long polling).
 
 ## Tests
 
-`npm test` — offline: A/B, slate, reveal, lock, duplicate picks, grading (winner and derived-from-correct), streak, You–AI score, first-win offer once, 30 h offer rules, weekly top, `/r`, postbacks, FTD stop, blocked users.
+`npm test` — offline: phone normalization, 3-way normalizer, slate filters, reveal, A/B ask timing, consent, own-contact check, typed numbers and updates, cancel / invalid input, lock, grading with draws, late asks and the 3-ask limit, /baja + webhook, CSV export with formula guard, stats, blocked users.

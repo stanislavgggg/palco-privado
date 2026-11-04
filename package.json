@@ -1,7 +1,7 @@
 {
-  "name": "esports-pickem-bot",
+  "name": "tu-vs-ia-bot",
   "version": "1.0.0",
-  "description": "Esports Pick'em vs AI by Coinplay — Telegram gasket bot: user picks winners, compares with AI models, streaks and weekly top -> Coinplay (reg/FTD postbacks)",
+  "description": "Tú vs IA — Spanish football pick'em vs AI models (GG Group, Spain). Collects WhatsApp numbers with GDPR consent.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

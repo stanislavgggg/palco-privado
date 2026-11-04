@@ -1,40 +1,46 @@
 const { Markup } = require('telegraf');
 const T = require('./texts');
-const { redirectUrl } = require('./links');
 
-// Callback data must stay under 64 bytes: we send the side (a|b), not team names.
 const kb = {
-  intro: () => Markup.inlineKeyboard([[Markup.button.callback(T.btn.start, 'slate')]]),
+  question: (m) => Markup.inlineKeyboard([
+    [Markup.button.callback(String(m.home).slice(0, 30), `pick:${m.id}:home`)],
+    [Markup.button.callback('Empate', `pick:${m.id}:draw`)],
+    [Markup.button.callback(String(m.away).slice(0, 30), `pick:${m.id}:away`)],
+  ]),
 
-  question: (m) =>
-    Markup.inlineKeyboard([[
-      Markup.button.callback(String(m.teamA).slice(0, 30), `pick:${m.id}:a`),
-      Markup.button.callback(String(m.teamB).slice(0, 30), `pick:${m.id}:b`),
-    ]]),
+  afterPick: (hasMore) => Markup.inlineKeyboard([
+    hasMore ? [Markup.button.callback(T.btn.next, 'slate')] : [Markup.button.callback(T.btn.top, 'top')],
+    [Markup.button.callback(T.btn.me, 'me')],
+  ]),
 
-  afterPick: (hasMore) =>
-    Markup.inlineKeyboard([
-      hasMore ? [Markup.button.callback(T.btn.nextMatch, 'slate')] : [Markup.button.callback(T.btn.top, 'top')],
-      [Markup.button.callback(T.btn.myScore, 'me')],
-    ]),
-
-  graded: (config) =>
-    Markup.inlineKeyboard([
-      [Markup.button.callback(T.btn.slate, 'slate'), Markup.button.callback(T.btn.top, 'top')],
-      [Markup.button.url(T.btn.channel, config.channelUrl)],
-    ]),
+  graded: () => Markup.inlineKeyboard([
+    [Markup.button.callback(T.btn.slate, 'slate'), Markup.button.callback(T.btn.top, 'top')],
+  ]),
 
   slate: () => Markup.inlineKeyboard([[Markup.button.callback(T.btn.slate, 'slate')]]),
 
-  menu: (config) =>
-    Markup.inlineKeyboard([
-      [Markup.button.callback(T.btn.slate, 'slate')],
-      [Markup.button.callback(T.btn.top, 'top'), Markup.button.callback(T.btn.myScore, 'me')],
-      [Markup.button.url(T.btn.channel, config.channelUrl)],
-    ]),
+  menu: () => Markup.inlineKeyboard([
+    [Markup.button.callback(T.btn.slate, 'slate')],
+    [Markup.button.callback(T.btn.top, 'top'), Markup.button.callback(T.btn.me, 'me')],
+  ]),
 
-  coinplay: (config, userId, label, opts) =>
-    Markup.inlineKeyboard([[Markup.button.url(label, redirectUrl(config, userId, opts))]]),
+  waAsk: () => Markup.inlineKeyboard([
+    [Markup.button.callback(T.btn.accept, 'wa:yes')],
+    [Markup.button.callback(T.btn.later, 'wa:later')],
+  ]),
+
+  // Reply keyboard: Telegram's native "share contact" button.
+  waShare: () => Markup.keyboard([
+    [Markup.button.contactRequest(T.btn.share)],
+    [T.btn.cancel],
+  ]).oneTime().resize(),
+
+  removeReply: () => Markup.removeKeyboard(),
+
+  community: (cfg) => (cfg.communityUrl
+    ? Markup.inlineKeyboard([[Markup.button.url(T.btn.community(cfg.communityLabel), cfg.communityUrl)],
+      [Markup.button.callback(T.btn.slate, 'slate')]])
+    : kb.slate()),
 };
 
 module.exports = kb;

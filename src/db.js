@@ -20,16 +20,20 @@ function openDb(dbPath) {
       score_user INTEGER DEFAULT 0,
       score_ai INTEGER DEFAULT 0,
       graded_count INTEGER DEFAULT 0,
-      first_win_at INTEGER,
-      clicked_at INTEGER,
-      reg_at INTEGER,
-      ftd_at INTEGER,
+      wa_state TEXT,
+      wa_asks INTEGER DEFAULT 0,
+      wa_phone TEXT,
+      wa_phone_source TEXT,
+      wa_es_mobile INTEGER,
+      wa_saved_at INTEGER,
+      consent_at INTEGER,
+      consent_version TEXT,
+      optout_at INTEGER,
       blocked INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS picks (
       user_id INTEGER NOT NULL,
       match_id TEXT NOT NULL,
-      game TEXT,
       pick TEXT NOT NULL,
       ai_pick TEXT,
       created_at INTEGER NOT NULL,
@@ -38,7 +42,6 @@ function openDb(dbPath) {
       ai_correct INTEGER,
       PRIMARY KEY (user_id, match_id)
     );
-    CREATE INDEX IF NOT EXISTS picks_graded ON picks(graded, created_at);
     CREATE TABLE IF NOT EXISTS jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -64,7 +67,6 @@ function openDb(dbPath) {
 
   const api = {
     raw: db,
-
     getUser: (id) => db.prepare('SELECT * FROM users WHERE id = ?').get(id),
 
     upsertUser({ id, username, first_name, src, variant }) {
@@ -74,8 +76,7 @@ function openDb(dbPath) {
           .run(username || null, first_name || null, id);
         return { user: api.getUser(id), isNew: false };
       }
-      db.prepare(`INSERT INTO users (id, username, first_name, src, variant, created_at)
-                  VALUES (?, ?, ?, ?, ?, ?)`)
+      db.prepare('INSERT INTO users (id, username, first_name, src, variant, created_at) VALUES (?, ?, ?, ?, ?, ?)')
         .run(id, username || null, first_name || null, src || 'organic', variant, now());
       return { user: api.getUser(id), isNew: true };
     },
@@ -87,68 +88,44 @@ function openDb(dbPath) {
         .run(...keys.map((k) => fields[k]), id);
     },
 
-    // --- picks ---
-    getPick: (userId, matchId) =>
-      db.prepare('SELECT * FROM picks WHERE user_id = ? AND match_id = ?').get(userId, String(matchId)),
-
-    addPick({ userId, matchId, game, pick, aiPick }) {
-      const r = db.prepare(`INSERT OR IGNORE INTO picks (user_id, match_id, game, pick, ai_pick, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?)`)
-        .run(userId, String(matchId), game, pick, aiPick, now());
-      return r.changes === 1;
+    getPick: (u, m) => db.prepare('SELECT * FROM picks WHERE user_id = ? AND match_id = ?').get(u, String(m)),
+    addPick({ userId, matchId, pick, aiPick }) {
+      return db.prepare(`INSERT OR IGNORE INTO picks (user_id, match_id, pick, ai_pick, created_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(userId, String(matchId), pick, aiPick, now()).changes === 1;
     },
-
-    pickedIds: (userId) =>
-      db.prepare('SELECT match_id FROM picks WHERE user_id = ?').all(userId).map((r) => r.match_id),
-
-    pickCount: (userId) => db.prepare('SELECT COUNT(*) c FROM picks WHERE user_id = ?').get(userId).c,
-
-    gradePick(userId, matchId, correct, aiCorrect) {
+    pickedIds: (u) => db.prepare('SELECT match_id FROM picks WHERE user_id = ?').all(u).map((r) => r.match_id),
+    pickCount: (u) => db.prepare('SELECT COUNT(*) c FROM picks WHERE user_id = ?').get(u).c,
+    gradePick(u, m, correct, aiCorrect) {
       db.prepare('UPDATE picks SET graded = 1, correct = ?, ai_correct = ? WHERE user_id = ? AND match_id = ?')
-        .run(correct == null ? null : Number(correct), aiCorrect == null ? null : Number(aiCorrect), userId, String(matchId));
+        .run(Number(correct), Number(aiCorrect), u, String(m));
     },
 
-    // Weekly top by correct picks (ties: fewer graded picks = better accuracy, then earlier).
     weeklyTop(sinceMs, limit = 10) {
       return db.prepare(`
-        SELECT u.id, u.first_name, u.username,
-               SUM(p.correct = 1) AS wins, COUNT(*) AS graded, MIN(p.created_at) AS first_at
+        SELECT u.id, u.first_name, u.username, SUM(p.correct = 1) AS wins, COUNT(*) AS graded, MIN(p.created_at) AS first_at
         FROM picks p JOIN users u ON u.id = p.user_id
-        WHERE p.graded = 1 AND p.correct IS NOT NULL AND p.created_at >= ?
-        GROUP BY u.id
-        HAVING wins > 0
-        ORDER BY wins DESC, graded ASC, first_at ASC
-        LIMIT ?`).all(sinceMs, limit);
+        WHERE p.graded = 1 AND p.created_at >= ?
+        GROUP BY u.id HAVING wins > 0
+        ORDER BY wins DESC, graded ASC, first_at ASC LIMIT ?`).all(sinceMs, limit);
     },
-
     weeklyRank(userId, sinceMs) {
       const rows = api.weeklyTop(sinceMs, 100000);
       const i = rows.findIndex((r) => r.id === userId);
       return i === -1 ? null : { rank: i + 1, of: rows.length, wins: rows[i].wins };
     },
 
-    // --- events / jobs ---
     logEvent(userId, type, meta) {
       db.prepare('INSERT INTO events (user_id, type, meta, created_at) VALUES (?, ?, ?, ?)')
         .run(userId || null, type, meta ? JSON.stringify(meta) : null, now());
     },
-
     schedule(userId, kind, runAt, payload = '') {
       db.prepare('INSERT OR IGNORE INTO jobs (user_id, kind, run_at, payload) VALUES (?, ?, ?, ?)')
         .run(userId, kind, runAt, String(payload));
     },
-
-    dueJobs(limit = 200) {
-      return db.prepare('SELECT * FROM jobs WHERE done = 0 AND run_at <= ? ORDER BY run_at LIMIT ?')
-        .all(now(), limit);
-    },
-
+    dueJobs: (limit = 200) =>
+      db.prepare('SELECT * FROM jobs WHERE done = 0 AND run_at <= ? ORDER BY run_at LIMIT ?').all(now(), limit),
     finishJob: (id) => db.prepare('UPDATE jobs SET done = 1 WHERE id = ?').run(id),
-
-    retryJob(id, runAt) {
-      db.prepare('UPDATE jobs SET run_at = ?, attempts = attempts + 1 WHERE id = ?').run(runAt, id);
-    },
-
+    retryJob: (id, runAt) => db.prepare('UPDATE jobs SET run_at = ?, attempts = attempts + 1 WHERE id = ?').run(runAt, id),
     cancelJobs(userId, kinds) {
       const q = kinds
         ? `UPDATE jobs SET done = 1 WHERE user_id = ? AND done = 0 AND kind IN (${kinds.map(() => '?').join(',')})`
@@ -161,14 +138,25 @@ function openDb(dbPath) {
         SELECT u.src, u.variant,
           COUNT(*) AS starts,
           SUM((SELECT COUNT(*) FROM picks p WHERE p.user_id = u.id) > 0) AS pickers,
-          SUM(u.clicked_at IS NOT NULL) AS clicks,
-          SUM(u.reg_at IS NOT NULL) AS regs,
-          SUM(u.ftd_at IS NOT NULL) AS ftds,
+          SUM(u.wa_asks > 0) AS asked,
+          SUM(u.wa_phone IS NOT NULL) AS leads,
+          SUM(u.wa_phone IS NOT NULL AND u.wa_es_mobile = 1) AS es_leads,
+          SUM(u.optout_at IS NOT NULL) AS optouts,
           SUM(u.blocked) AS blocked
         FROM users u GROUP BY u.src, u.variant ORDER BY starts DESC`).all();
     },
-  };
 
+    leads({ src } = {}) {
+      const where = src ? 'AND u.src = ?' : '';
+      return db.prepare(`
+        SELECT u.id AS telegram_id, u.username, u.first_name, u.wa_phone AS phone, u.wa_phone_source AS phone_source,
+               u.wa_es_mobile AS es_mobile, u.src, u.variant, u.consent_at, u.consent_version, u.wa_saved_at,
+               (SELECT COUNT(*) FROM picks p WHERE p.user_id = u.id) AS picks,
+               u.score_user, u.score_ai
+        FROM users u WHERE u.wa_phone IS NOT NULL AND u.optout_at IS NULL ${where}
+        ORDER BY u.wa_saved_at`).all(...(src ? [src] : []));
+    },
+  };
   return api;
 }
 

@@ -1,18 +1,13 @@
-// CoinPlay AI sets.json client + normalizer.
+// Football predictions export (sets.json, read-only, bearer token) + normalizer.
 //
-// The export's exact field names were not available when this was written,
-// so normalizeSet() accepts several common spellings. If a match card shows
-// empty fields, adjust pick() paths below against one real record
-// (see fixtures/sets.sample.json for the shape the bot works with).
+// Football has three outcomes. Picks/results are normalized to:
+//   'home' | 'draw' | 'away'
+// The export's exact field names weren't available when this was written,
+// so normalizeSet() accepts several spellings. Check it against one real
+// record before launch (fixtures/sets.sample.json shows the target shape).
 
 const fs = require('fs');
 const path = require('path');
-
-const GAME_ALIASES = {
-  cs2: ['cs2', 'csgo', 'cs:go', 'counter-strike', 'counter strike', 'cs'],
-  dota2: ['dota2', 'dota 2', 'dota'],
-  valorant: ['valorant', 'val'],
-};
 
 function pick(obj, paths) {
   for (const p of paths) {
@@ -22,90 +17,92 @@ function pick(obj, paths) {
   return undefined;
 }
 
-function normGame(raw) {
-  const s = String(raw || '').toLowerCase().trim();
-  for (const [code, aliases] of Object.entries(GAME_ALIASES)) {
-    if (aliases.some((a) => s === a || s.includes(a))) return code;
-  }
-  return null;
-}
-
 function toMs(v) {
   if (v == null) return null;
   if (typeof v === 'number') return v < 1e12 ? v * 1000 : v;
-  // Fixture helper: "now+90" / "now-180" = minutes relative to now.
-  const rel = /^now([+-]\d+)$/.exec(String(v));
+  const rel = /^now([+-]\d+)$/.exec(String(v)); // fixture helper: minutes from now
   if (rel) return Date.now() + Number(rel[1]) * 60_000;
   const t = Date.parse(v);
   return Number.isNaN(t) ? null : t;
 }
 
-// Placeholder texts the prediction bot uses when it is not confident.
+const isFootball = (raw) => /football|soccer|f[uú]tbol|laliga|la liga|champions|premier|serie a|bundesliga/i.test(String(raw || ''));
+
+const norm = (s) => String(s || '').trim().toLowerCase();
+
+// Map a pick value to home/draw/away using the team names.
+function side(value, home, away) {
+  const v = norm(value);
+  if (!v) return null;
+  if (['draw', 'x', 'empate', 'tie', 'd'].includes(v)) return 'draw';
+  if (['home', '1', 'h', 'local'].includes(v) || v === norm(home)) return 'home';
+  if (['away', '2', 'a', 'visitante'].includes(v) || v === norm(away)) return 'away';
+  return null;
+}
+
+function sideFromScore(score) {
+  const m = /^\s*(\d+)\s*[:\-–]\s*(\d+)\s*$/.exec(String(score || ''));
+  if (!m) return null;
+  const h = Number(m[1]);
+  const a = Number(m[2]);
+  return h > a ? 'home' : h < a ? 'away' : 'draw';
+}
+
 const LOW_CONFIDENCE = /needs a human/i;
 
 function normalizeSet(s) {
-  const teamA = pick(s, ['match.team_a', 'match.home', 'team_a', 'home', 'teams.0.name', 'teams.0']);
-  const teamB = pick(s, ['match.team_b', 'match.away', 'team_b', 'away', 'teams.1.name', 'teams.1']);
-  const game = normGame(pick(s, ['game', 'discipline', 'match.game', 'sport', 'category']));
-  const startsAt = toMs(pick(s, ['match.start_time', 'start_time', 'starts_at', 'match.starts_at', 'kickoff', 'date']));
+  const home = pick(s, ['match.home', 'match.team_a', 'home', 'team_a', 'teams.0.name', 'teams.0']);
+  const away = pick(s, ['match.away', 'match.team_b', 'away', 'team_b', 'teams.1.name', 'teams.1']);
+  const competition = pick(s, ['match.competition', 'match.tournament', 'competition', 'tournament', 'league', 'event']) || '';
+  const sport = pick(s, ['sport', 'game', 'discipline', 'category', 'channel']) || competition;
 
   const modelsRaw = pick(s, ['models', 'predictions', 'model_predictions']) || [];
   const models = (Array.isArray(modelsRaw) ? modelsRaw : Object.entries(modelsRaw).map(([name, v]) => ({ name, ...v })))
     .map((m) => ({
       name: pick(m, ['name', 'model', 'id']) || 'model',
-      pick: pick(m, ['pick', 'winner', 'prediction', 'side']),
+      side: side(pick(m, ['pick', 'winner', 'prediction', 'outcome', 'side']), home, away),
       rationale: pick(m, ['rationale', 'reason', 'reasoning', 'why']) || '',
     }))
-    .filter((m) => m.pick);
+    .filter((m) => m.side);
 
-  let consensusPick = pick(s, ['consensus.pick', 'consensus.winner', 'consensus']);
-  if (typeof consensusPick === 'object') consensusPick = undefined;
-  let agree = pick(s, ['consensus.agree', 'consensus.count']);
-  const total = pick(s, ['consensus.total']) || models.length;
-  if (models.length) {
-    const tally = {};
-    for (const m of models) tally[m.pick] = (tally[m.pick] || 0) + 1;
-    const [topPick, topCount] = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
-    if (!consensusPick) consensusPick = topPick;
-    if (agree == null) agree = tally[consensusPick] || topCount;
-  }
+  const tally = { home: 0, draw: 0, away: 0 };
+  for (const m of models) tally[m.side]++;
+  let consensus = side(pick(s, ['consensus.pick', 'consensus.outcome', 'consensus']), home, away);
+  if (!consensus && models.length) consensus = Object.entries(tally).sort((a, b) => b[1] - a[1])[0][0];
 
-  const resultRaw = pick(s, ['result', 'graded', 'outcome']);
+  const r = pick(s, ['result', 'graded', 'outcome_result']);
   let result = null;
-  if (resultRaw && typeof resultRaw === 'object') {
-    const status = String(pick(resultRaw, ['status', 'state']) || '').toLowerCase();
-    const correct = pick(resultRaw, ['correct', 'hit', 'is_correct']);
-    const winner = pick(resultRaw, ['winner']);
-    const graded = ['graded', 'final', 'finished', 'settled', 'done'].includes(status) || typeof correct === 'boolean';
-    if (graded) {
-      result = {
-        score: pick(resultRaw, ['score', 'final_score']) || '',
-        winner: winner || null,
-        correct: typeof correct === 'boolean' ? correct : (winner ? winner === consensusPick : null),
-      };
+  if (r && typeof r === 'object') {
+    const score = pick(r, ['score', 'final_score']) || '';
+    const outcome = side(pick(r, ['winner', 'outcome']), home, away) || sideFromScore(score);
+    const status = norm(pick(r, ['status', 'state']));
+    if (outcome && (['graded', 'final', 'finished', 'settled', 'done', 'ft'].includes(status) || !status)) {
+      result = { score: String(score), outcome };
     }
   }
 
-  const rationaleText = models.map((m) => m.rationale).join(' ');
+  const text = models.map((m) => m.rationale).join(' ') + ' ' + String(pick(s, ['note', 'text']) || '');
   return {
-    id: String(pick(s, ['id', 'set_id', 'match.id', 'match_id']) || `${teamA}-${teamB}-${startsAt}`),
-    game,
-    teamA: teamA && String(teamA),
-    teamB: teamB && String(teamB),
-    tournament: pick(s, ['match.tournament', 'tournament', 'league', 'event']) || '',
-    startsAt,
-    consensusPick: consensusPick && String(consensusPick),
-    agree: Number(agree || 0),
-    total: Number(total || 0),
+    id: String(pick(s, ['id', 'set_id', 'match.id', 'match_id']) || `${home}-${away}-${pick(s, ['match.start_time', 'start_time'])}`),
+    football: isFootball(sport) || isFootball(competition),
+    home: home && String(home),
+    away: away && String(away),
+    competition: String(competition),
+    startsAt: toMs(pick(s, ['match.start_time', 'start_time', 'starts_at', 'match.starts_at', 'kickoff', 'date'])),
+    consensus,
+    agree: consensus ? tally[consensus] : 0,
+    total: models.length,
     models,
     result,
-    lowConfidence: LOW_CONFIDENCE.test(rationaleText) || LOW_CONFIDENCE.test(String(pick(s, ['note', 'text']) || '')),
+    lowConfidence: LOW_CONFIDENCE.test(text),
   };
 }
 
-function isUsable(m) {
-  return m.game && m.teamA && m.teamB && m.startsAt && m.consensusPick && !m.lowConfidence
-    && m.total > 0 && m.agree * 2 > m.total; // majority only
+function isUsable(m, { minShare = 0.5, leagues = [] } = {}) {
+  if (!m.football || !m.home || !m.away || !m.startsAt || !m.consensus || m.lowConfidence || !m.total) return false;
+  if (m.agree / m.total < minShare) return false;
+  if (leagues.length && !leagues.some((l) => m.competition.toLowerCase().includes(l.toLowerCase()))) return false;
+  return true;
 }
 
 function createApi(config, { fetchImpl = global.fetch, cacheMs = 60_000 } = {}) {
@@ -127,7 +124,7 @@ function createApi(config, { fetchImpl = global.fetch, cacheMs = 60_000 } = {}) 
     try {
       const raw = await loadRaw();
       const list = Array.isArray(raw) ? raw : (raw.sets || raw.items || raw.data || []);
-      cache = { at: Date.now(), items: list.map(normalizeSet).filter((m) => m.game) };
+      cache = { at: Date.now(), items: list.map(normalizeSet).filter((m) => m.football) };
     } catch (e) {
       console.error('[api] load failed:', e.message);
       if (!cache.items.length) throw e;
@@ -135,28 +132,11 @@ function createApi(config, { fetchImpl = global.fetch, cacheMs = 60_000 } = {}) 
     return cache.items;
   }
 
-  // Upcoming usable matches for a game, soonest first, within the next 48h.
-  async function upcoming(game, { now = Date.now(), horizonMs = 48 * 3600e3 } = {}) {
-    const items = await all();
-    return items
-      .filter((m) => m.game === game && isUsable(m) && !m.result
-        && m.startsAt > now && m.startsAt < now + horizonMs)
-      .sort((a, b) => a.startsAt - b.startsAt);
-  }
-
   async function byId(id) {
-    const items = await all();
-    return items.find((m) => m.id === String(id)) || null;
+    return (await all()).find((m) => m.id === String(id)) || null;
   }
 
-  // Graded record for a game (all time in the export).
-  async function record(game) {
-    const items = await all();
-    const graded = items.filter((m) => (!game || m.game === game) && m.result && typeof m.result.correct === 'boolean');
-    return { total: graded.length, correct: graded.filter((m) => m.result.correct).length };
-  }
-
-  return { all, upcoming, byId, record, _reset: () => { cache = { at: 0, items: [] }; } };
+  return { all, byId, isUsable: (m) => isUsable(m, { minShare: config.minShare, leagues: config.leagues }) };
 }
 
-module.exports = { createApi, normalizeSet, isUsable, normGame };
+module.exports = { createApi, normalizeSet, isUsable, side, sideFromScore };
