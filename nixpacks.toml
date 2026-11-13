@@ -1,0 +1,2 @@
+# Force the Python provider so Nixpacks ignores any stray package.json / package-lock.json
+providers = ["python"]
