@@ -1,98 +1,98 @@
-# Palco Privado · Tú vs IA — football pick'em for Spain (GG Group)
+# Chollos bot: сбор номеров за купоны и акции (Испания)
 
-Spanish version of the "You vs AI" game, for the **GG Group** Spain line (Coinplay is geoblocked in Spain and is not mentioned anywhere in this bot).
+Telegram-бот с испанской «персонажем». Человек жмёт /start, потом одну кнопку «📲 Recibir mis cupones»,
+делится номером и сразу получает купон. Номер сохраняется с отметкой согласия на рассылку по WhatsApp.
+Без редиректов, трекеров и триггерных цепочек.
 
-The user picks how LaLiga / Champions League matches end (home / draw / away), then sees what the AI models picked and why. After each match: right or wrong, streak, the score **Tú vs IA**, weekly rank. The goal of the funnel is a **WhatsApp number with explicit consent** for the LeadDeus follow-up.
+## Как это работает
 
-No betting operator, bonus or prize inside the bot: it's a free football game. Operator messaging happens later over WhatsApp and must follow Spanish gambling-advertising rules — check with legal before those messages go out.
+1. `/start <source>`: приветствие (с фото, если есть `assets/persona.png|jpg|webp`), текст согласия и кнопка «поделиться контактом».
+   `source` берётся из ссылки рекламы: `https://t.me/<бот>?start=es_tgads_chollos1`. Первый source человека фиксируется навсегда.
+2. Человек делится номером: бот проверяет, что это **его собственный** контакт (Telegram позволяет переслать чужой),
+   приводит к E.164, определяет страну, пишет в базу время и версию согласия, отправляет купон из `offers.json`.
+3. Меню: «🔥 Chollos de hoy» (акции из `offers.json`), «🔕 Darme de baja» (`/stop`). `/borrar` удаляет все данные человека.
 
-## Flow
+Админ-команды (только `ADMIN_IDS`):
+- `/stats`: сколько нажали /start, сколько поделились номером, конверсия, отписки; цифры за сегодня и за 7 дней (по Мадриду); разбивка по странам и по source с конверсией в % (всего и за 7 дней). Source берётся из ссылки `t.me/<бот>?start=<метка>`, на каждое объявление своя метка.
+- `/resync`: досылает в Google Sheets лиды, которые не ушли (например, если таблица была недоступна).
+- `/export`: CSV `leads.csv` (номер, страна, имя, source, время согласия и версия текста согласия). В выгрузке только те, кто не отписался.
+- `/broadcast текст` и затем `/confirm` (или `/cancel`): рассылка в Telegram только тем, кто поделился номером и не отписался. В конец добавляется «/stop».
 
-1. `/start <source>` → intro + first match question (up to 5 matches in the next 48 h; only competitions in `LEAGUES`; only matches where at least `MIN_SHARE` of models agree; "needs a human" placeholders never shown). Picks close 5 min before kickoff. Times in Europe/Madrid.
-2. **Reveal** after each pick: "Coincides con la IA" or "Te la juegas — 3 de 4 modelos van con …" + the AI's main reason.
-3. **Grading** ~2 h after kickoff (re-checks every 30 min up to ~6 h): result, ✅/❌ for the user and the AI, Tú–IA score, streak, weekly rank. Draws count as an outcome.
-4. **WhatsApp ask — A/B by telegram_id:** **A** (even) right after the first pick · **B** (odd) after the first graded result. Plus late asks at +26 h and +72 h for users who picked but haven't left a number. Max 3 asks per user.
-5. **Consent:** one tap "Acepto (18+)" on a message that states the 18+ confirmation, the purpose (football picks and commercial messages over WhatsApp), the company (`COMPANY_NAME`), how to opt out (/baja or "BAJA"), and the privacy link (`PRIVACY_URL`). Consent time and version are stored.
-6. **Number:** Telegram's native "share my number" button (only the user's own contact is accepted) or typed (612 345 678 → +34612345678). After saving, the user can type another number if their WhatsApp differs. Then a button to the community (`COMMUNITY_URL`).
-7. **Daily push** for 14 days when matches are open.
-8. **/baja** deletes the number, withdraws consent and sends an `optout` event to the webhook.
+## Запуск локально
 
-## Leads
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env      # впиши BOT_TOKEN и ADMIN_IDS
+python -m bot.main
+pytest                    # тесты без сети
+```
 
-- **Webhook (optional):** every new / updated lead and every opt-out is POSTed as JSON to `LEAD_WEBHOOK_URL` (LeadDeus, Make.com…): `telegram_id, username, first_name, phone, phone_source, es_mobile, src, variant, consent_at, consent_version, picks, score_user, score_ai`.
-- **/export** (admins) — CSV of all leads; **/export <source>** — one source only, for the batch testing by source (never mix sources in one batch).
-- **/stats** — by source × variant: starts, users who picked, asked, leads, Spanish mobile leads, opt-outs, blocked.
+## Деплой на Railway
 
-## Bot profile
+1. Новый проект из этого репозитория.
+2. Добавь плагин **PostgreSQL**: Railway сам подставит `DATABASE_URL` (бот преобразует его под asyncpg).
+   Не оставляй SQLite на проде: файловая система Railway стирается при каждом деплое, и номера пропадут.
+3. Variables: `BOT_TOKEN`, `ADMIN_IDS`, `BRAND_NAME`, `PRIVACY_URL`, `PERSONA_NAME`, при желании `WHATSAPP_NUMBER`, `ALLOWED_REGIONS`.
+4. Фото персонажа: положи в `assets/persona.png` (подойдут также `.jpg`, `.webp`) и закоммить, бот найдёт файл сам. Аватарку бота ставит @BotFather (`/setuserpic`).
+5. Процесс запускается как worker (`python -m bot.main`, long polling), порт открывать не нужно.
 
-Name chosen against SPY_TG (Nov 2026): in Spanish Telegram ads "club privado", "grupo privado", "exclusivo" and "VIP" are used by trading-signal and paid-tipster channels with fake scarcity ("30 plazas gratis y luego 19,99 €"). "Palco Privado" keeps the private-club feel with a football image, and the copy says the opposite of those channels: no gifted tips, no limited spots.
+## Лиды в Google Sheets
 
-- **Name:** Palco Privado · Tú vs IA
-- **Username (check availability):** `@PalcoPrivadoBot`, `@palco_privado_bot`, `@palcoprivado_ia_bot`
-- **About (≤120):** Tu palco privado de LaLiga y Champions: tú eliges el resultado, 4 modelos de IA eligen el suyo. 18+
-- **Description (≤512):**
-  > Bienvenido al Palco Privado.
-  >
-  > Aquí no te regalamos pronósticos: los haces tú. Cada jornada eliges cómo acaban los partidos de LaLiga y Champions y después ves qué eligieron nuestros modelos de IA y por qué.
-  >
-  > Tras cada partido: acierto o fallo, tu racha y el marcador Tú vs IA. Top semanal del palco.
-  >
-  > Gratis. Sin premios ni plazas limitadas: entra quien sabe de fútbol. 18+
-- **Avatar:** dark-green velvet of a stadium box, a large football half made of glowing neural-network lines. No text.
+Бот отправляет каждый новый лид в таблицу «Quiz leads Oct 2026», в лист `Untitled`, через уже существующий скрипт Apps Script,
+который принимает лиды с квиз-лендингов. Отдельный скрипт и изменения в таблице не нужны. На Railway добавляется одна переменная:
+`SHEETS_WEBHOOK_URL`, то есть URL этого веб-приложения (в проекте Apps Script: Deploy → Manage deployments → Web app, адрес на `/exec`).
 
-## Ads (ES, ≤160 chars, tag `?start=es_p<code>`)
+Строка пишется в схеме таблицы: `lead_id = tg_<telegram_id>`, `quiz_id = es_tg_chollos_bot`, `geo` (страна по префиксу номера),
+`phone` (+34…), `whatsapp_consent = TRUE`, `consent = FALSE` (это согласие на email, его мы не собираем), `answers_json`
+(source, username, имя, telegram_id), `consent_text_version`, `utm_source = telegram`, `utm_campaign` (source из ссылки рекламы),
+`brand`, `referrer = telegram_bot`. Время ставит сам скрипт.
 
-| Code | Text | Angle | Target |
-| --- | --- | --- | --- |
-| p1 | Entra al Palco Privado: tú eliges cómo acaba [partido], 4 modelos de IA eligen el suyo. El marcador manda ⚽ | Match + mechanism | football channels |
-| p2 | Aquí no se regalan pronósticos: los haces tú. Elige resultados de LaLiga y compite contra la IA. | Contrast with tipsters | football channels |
-| p3 | Todos dicen que lo vieron venir. En el Palco se apunta: tu pronóstico, el de la IA y el resultado final. | Identification | broad |
-| p4 | ¿Lees LaLiga mejor que una IA? Palco Privado: cada jornada, tú contra 4 modelos. Gratis ⚽ | Challenge | broad |
-| p5 | Sin plazas limitadas ni «cuotones» regalados. Eliges resultado, la IA elige el suyo y el partido decide. | Honesty | football channels |
-| p6 | La IA ya tiene su resultado para [partido]. ¿Y tú? Haz tu pronóstico en el Palco y compara. | Curiosity | broad |
-| p7 | Para los que analizan antes del pitido inicial: elige el resultado y compáralo con 4 modelos de IA. | Identification | broad |
-| p8 | Tu racha contra la IA empieza la próxima jornada. Palco Privado: gratis, un toque por partido. | Ease | broad |
+Как ведёт себя отправка:
+- Дубли скрипт определяет по `lead_id`, то есть по Telegram-аккаунту: если человек поделится вторым номером, в таблицу он не попадёт.
+- Если Google недоступен или скрипт занят, бот повторяет запрос 3 раза. Если не вышло, номер остаётся в базе, а `/resync` (команда админа) досылает все неотправленные.
+- Скрипту нужны в листе все колонки из его списка `HEADERS`, иначе он вернёт `missing_columns` (в логе бота будет видно).
+- Удаление по `/borrar` стирает данные из базы бота, но строку в таблице нужно удалить вручную.
 
-Fill `[partido]` with a real fixture on the day; on Monday–Tuesday prefer p3, p4, p7, p8. If moderation rejects "cuotones" in p5, use "sin pronósticos de pago". No ad uses "apuesta", bonuses or scarcity — it's a free game open to everyone.
+## Политика приватности
 
-Start test: contrast (p2, p5 in football channels) vs challenge (p4, p8 broad) vs identification (p3, p7). Judge by cost per WhatsApp number; export each batch with `/export es_p<code>`.
+Текст политики (RGPD/LSSI, на испанском) лежит в `legal/privacidad_es.html`. Бот сам отдаёт её страницей `/privacidad`
+на публичном домене Railway и показывает ссылку в тексте согласия и по команде `/privacidad`.
+Реквизиты оператора подставляются из переменных `LEGAL_NAME`, `LEGAL_ID`, `LEGAL_ADDRESS`, `PRIVACY_EMAIL`
+(если юр. поля не заданы, на странице видно «[pendiente de completar]»; если не задан `PRIVACY_EMAIL`, в политике указан контакт через бота и почтовый адрес компании, плюс предупреждение в логе).
+Если `PRIVACY_URL` не задан, ссылка собирается из `RAILWAY_PUBLIC_DOMAIN`.
+Домен должен быть привязан именно к сервису с ботом (Settings → Networking). Railway сам передаёт `PORT`, ничего больше открывать не нужно.
+Меняешь текст политики: поправь `legal/privacidad_es.html`, обнови `POLICY_UPDATED` в `bot/site.py` и, если изменилось то, на что согласился человек, увеличь `CONSENT_VERSION` в `bot/config.py`.
+Это шаблон, а не юридическая консультация: перед запуском трафика покажи его юристу.
 
-## Mini app (same service, same domain)
+## Что нужно заполнить до запуска трафика
 
-The bot's Express server also serves the mini app — nothing extra to deploy:
+- Купон: переменная `WELCOME_COUPON_CODE` (плюс необязательные `WELCOME_COUPON_TITLE` и `WELCOME_COUPON_DESCRIPTION`). Пока код не задан, бот отправит подтверждение без купона и напишет ошибку в лог: выдуманный код людям не уходит.
+- `offers.json`: список `deals` для кнопки «Chollos de hoy» (пока пусто, бот отвечает «ofertas nuevas todavía no hay»).
+- `BRAND_NAME` и `PRIVACY_URL`: в тексте согласия должно быть видно, кто собирает номер и рассылает, и куда идти за политикой конфиденциальности.
+- Тексты в `bot/texts.py`. Если меняешь текст согласия, увеличь `CONSENT_VERSION` в `bot/config.py`.
 
-| Path | What |
-| --- | --- |
-| `/app/` | The game: match tickets, pick home / draw / away, AI reveal after your pick, Tú–IA scoreboard, results, weekly top |
-| `/app/privacy`, `/app/terms` | Privacy policy and terms (Spanish), filled from `COMPANY_*`, `PRIVACY_EMAIL`, `LEGAL_UPDATED` |
-| `/api/*` | JSON API; every call is authenticated with Telegram `initData` (HMAC with the bot token, max age 24 h) |
+## Про согласие и WhatsApp
 
-Same database, same game: a pick made in the app is graded by the same scheduler; the user gets the result in the bot chat if they allowed messages (`allows_write_to_pm`, or the "Avisarme en Telegram" button → `requestWriteAccess`). Users who never allowed messages are not messaged and not counted as blocked. `/stats` shows `via app` per source.
+- Согласие даётся самим действием (нажатие кнопки под текстом согласия), время и версия текста лежат в базе.
+  Для Испании и ЕС это нужно, чтобы потом рассылать маркетинг (RGPD, LSSI) и чтобы WhatsApp Business не блокировал номер.
+- Рассылку в WhatsApp бот не делает: `/export` отдаёт базу в CSV, дальше её загружаешь в тот инструмент, из которого пишешь.
+  Для Business API первое сообщение обычно должно идти шаблоном, который согласуется в WhatsApp.
+- Это не юридическая консультация: формулировку согласия и политику лучше показать юристу.
 
-**White-hat by design (for mini-app moderation):** no betting words, no operator, no bonus, no prizes, no money; footer says "free football prediction game, no real money, not a bookmaker"; terms state no affiliation with LaLiga / UEFA / clubs; the AI pick is shown only after the user picks; WhatsApp is an optional form with two unticked boxes (18+, consent) and a privacy link; one-tap opt-out deletes the number. The community link (Apuestas Guru) is **not** shown in the app — only in the bot after the number is saved.
+## Структура
 
-### Setup
-
-1. Railway variables: `PUBLIC_URL` (the service domain), `BOT_USERNAME`, `PRIVACY_EMAIL` (shown in the privacy page — required before launch), optionally `COMPANY_*`, `LEGAL_UPDATED`. With `PUBLIC_URL` set, `PRIVACY_URL` defaults to `<PUBLIC_URL>/app/privacy` (also used in the bot's consent text).
-2. The bot sets a **"Jugar"** menu button that opens `<PUBLIC_URL>/app/` on start.
-3. BotFather → `/newapp` → choose the bot → title "Palco Privado", short description, 640×360 image, URL `<PUBLIC_URL>/app/`, short name e.g. `palco`. Direct link: `https://t.me/<BOT_USERNAME>/palco`.
-4. Telegram Ads to the mini app: `https://t.me/<BOT_USERNAME>/palco?startapp=es_app<code>` — the start param becomes the user's source (same rules as `/start`: letters, digits, `_`, `-`, up to 64), so `/export es_app1` gives that batch.
-5. BotFather → `/setprivacy_policy`-style field in the bot profile (Bot Settings → Privacy Policy) → `<PUBLIC_URL>/app/privacy`.
-
-**Have a lawyer read `public/privacy.html` and `public/terms.html` before launch** — they're a reasonable GDPR-shaped draft, not legal advice. In particular: the list of processors (hosting, WhatsApp sending platform), data transfers outside the EEA, and retention periods must match what you actually use.
-
-### Mini app tests
-
-`npm test` runs both suites; `test/webapp.js` covers initData validation (valid / tampered / wrong token / expired), 401 without auth, static pages + CSP, legal pages rendering, registration from the app with source and message permission, picks and duplicates, AI hidden before the pick, grading for app users without message permission, history, WhatsApp consent / invalid phone / masking / webhook, opt-out, write-access grant, top without ids.
-
-## Data source
-
-`SETS_URL` + `SETS_TOKEN` — the football predictions export. Football has three outcomes; `src/api.js → normalizeSet()` maps picks to home / draw / away (team name, "1/X/2", "draw", "empate"…) and takes the result from `result.winner`/`outcome` or from the score ("2-1"). Check it against one real record before launch; `SETS_MOCK=1` runs on `fixtures/sets.sample.json`.
-
-## Deploy (Railway)
-
-Volume at `/data`, variables from `.env.example` (set `PRIVACY_URL` before collecting numbers — the bot warns at startup if it's empty), `npm start` (long polling).
-
-## Tests
-
-`npm test` — offline: phone normalization, 3-way normalizer, slate filters, reveal, A/B ask timing, consent, own-contact check, typed numbers and updates, cancel / invalid input, lock, grading with draws, late asks and the 3-ask limit, /baja + webhook, CSV export with formula guard, stats, blocked users.
+```
+bot/config.py    настройки из переменных окружения, версия согласия
+bot/texts.py     все тексты на испанском
+bot/handlers.py  /start, контакт, меню, /stop, /borrar
+bot/admin.py     /stats, /export, /broadcast
+bot/db.py        SQLAlchemy (Postgres или SQLite)
+bot/phone.py     нормализация номера, страна, валидность
+bot/offers.py    чтение offers.json
+bot/site.py      страница политики приватности (/privacidad)
+legal/           текст политики приватности (шаблон)
+bot/sheets.py    отправка лидов в Google Sheets
+offers.json      купон и акции (редактируй)
+tests/           smoke-тесты на фейковых апдейтах
+```

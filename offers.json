@@ -1,0 +1,9 @@
+{
+  "_comment": "Купон задаётся переменными WELCOME_COUPON_CODE / WELCOME_COUPON_TITLE / WELCOME_COUPON_DESCRIPTION (они важнее этого файла). Список deals ниже замени на свои реальные акции: запись-пример не показывается людям, пока в ней нет title.",
+  "welcome_coupon": {
+    "title": "Cupón de bienvenida",
+    "code": "",
+    "description": ""
+  },
+  "deals": []
+}
