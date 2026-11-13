@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 # Версия текста согласия. Меняешь текст согласия в texts.py, увеличь версию:
 # в базе будет видно, на какую редакцию согласился каждый человек.
-CONSENT_VERSION = "2026-11-v1"
+CONSENT_VERSION = "2026-11-v2"
 
 
 def _find_persona_photo(explicit: str) -> str:

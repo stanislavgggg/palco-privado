@@ -121,7 +121,7 @@ async def test_start_stores_source_once_and_shows_consent(env):
     await dp.feed_update(bot, msg(USER, "/start es_tgads_chollos1"))
     await dp.feed_update(bot, msg(USER, "/start otra_fuente"))
     out = session.texts()[0]
-    assert "Soy Lucía" in out and "aceptas recibir" in out and "/stop" in out and "example.com/privacy" in out
+    assert "Soy Lucía" in out and "aceptas recibir" not in out
     s = await db.stats()
     assert s.total_started == 1 and s.with_phone == 0
     assert s.by_source[0][0] == "es_tgads_chollos1"  # вторая ссылка source не перезаписала

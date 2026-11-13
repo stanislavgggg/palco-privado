@@ -10,15 +10,11 @@ BTN_STOP = "🔕 Darme de baja"
 
 def welcome(persona: str, brand: str, privacy_url: str, first_name: str | None) -> str:
     name = f", {html.escape(first_name)}" if first_name else ""
-    privacy = f' Más info: <a href="{html.escape(privacy_url)}">política de privacidad</a>.' if privacy_url else ""
     return (
         f"¡Hola{name}! 👋 Soy {html.escape(persona)}.\n\n"
         "Cada día rastreo chollos, errores de precio, cupones y promociones, "
         "y te los mando directamente a tu WhatsApp para que no se te escape ninguno. 🔥\n\n"
-        "Pulsa el botón de abajo y te envío ahora mismo tu primer código de descuento 👇\n\n"
-        f"🔒 <i>Al pulsar «Recibir mis cupones» compartes tu número de teléfono y aceptas recibir "
-        f"ofertas y promociones por WhatsApp de {html.escape(brand)}. "
-        f"Puedes darte de baja cuando quieras con /stop.{privacy}</i>"
+        "Pulsa el botón de abajo y te envío ahora mismo tu primer código de descuento 👇"
     )
 
 
